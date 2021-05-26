@@ -1,45 +1,65 @@
+
 /**
- * ==================================================================
- * Stackswan :
- * Uses CDP to communicate over LoRa ad-hoc
- * MAMA is upated to send data over clusterduck network
+ * @file Custom-Portal-Example.ino
+ * @brief Uses the built in Mama Duck.
  * 
- * TODO: 
- * 1) Edit captive portal with stackswan branding 
- * 2) Add a method for sending test sensor data 
- * ==================================================================
+ * This example is a Custom Mama Duck with a captive emergency portal, and it is periodically sending a message in the Mesh
+ * 
+ * SS = 5;
+  MOSI = 23;
+  MISO = 19;
+  SCK = 18;
+  RST = 14;
+  DIO0 = 26;
+  DIO1 = 33;
+ * 
+ * 
  */
 
-#include "timer.h"
+#include <string>
+#include <arduino-timer.h>
 #include <MamaDuck.h>
-#include <DuckDisplay.h>
+// You can build and modify your own Captive Portal by making edits to emergencyPortal.h 
+#include "emergencyPortal.h"
 
-auto timer = timer_create_default();
-const int INTERVAL_MS = 50000;
-char message[32]; 
-int counter = 1;
+#ifdef SERIAL_PORT_USBVIRTUAL
+#define Serial SERIAL_PORT_USBVIRTUAL
+#endif
 
-const char* DUCK_WIFI_AP = "MAMA DUCK PORTAL";
-// create an instance of a MamaDuck with a given unique id
+// create a built-in mama duck
+MamaDuck duck = MamaDuck();
 
-String deviceId = "MAMA001";
-
-  
-MamaDuck duck = MamaDuck(deviceId);
+// Create a Display Instance
 DuckDisplay* display = NULL;
-
 
 // LORA RF CONFIG
 #define LORA_FREQ 868.0 // Frequency Range. Set for US Region 915.0Mhz
 #define LORA_TXPOWER 20 // Transmit Power
 // LORA HELTEC PIN CONFIG
 #define LORA_CS_PIN 5
-#define LORA_DIO0_PIN 2
-#define LORA_DIO1_PIN -1 // unused
+#define LORA_DIO0_PIN 26
+#define LORA_DIO1_PIN 33 // unused
 #define LORA_RST_PIN 14
 
+const char* DUCK_WIFI_AP = "🆘 Emergency Internet 🆘 ";
+
+// create a timer with default settings
+auto timer = timer_create_default();
+
+// for sending the counter message
+const int INTERVAL_MS = 60000;
+int counter = 1;
 
 void setup() {
+  // The Device ID must be unique and 8 bytes long. Typically the ID is stored
+  // in a secure nvram, or provided to the duck during provisioning/registration
+  std::string deviceId("MAMA0001");
+  std::vector<byte> devId;
+  devId.insert(devId.end(), deviceId.begin(), deviceId.end()); 
+
+
+  //Set the Device ID
+  duck.setDeviceId(devId);
   // initialize the serial component with the hardware supported baudrate
   duck.setupSerial(115200);
   // initialize the LoRa radio with specific settings. This will overwrites settings defined in the CDP config file cdpcfg.h
@@ -48,32 +68,62 @@ void setup() {
   duck.setupWifi(DUCK_WIFI_AP);
   // initialize DNS
   duck.setupDns();
-  // initialize web server, enabling the captive portal with a custom HTML page
-//  duck.setupWebServer(true, HTML);
-  duck.setupWebServer(true);
-
+  // initialize web server, enabling the captive portal and pass in a Custom Captive portal from emergencyPortal.h
+  duck.setupWebServer(true, emergencyPortal);
   // initialize Over The Air firmware upgrade
   duck.setupOTA();
+
+  // This duck has an OLED display and we want to use it. 
+  // Get an instance and initialize it, so we can use in our application
+  display = DuckDisplay::getInstance();
+  display->setupDisplay(duck.getType(), devId);
+  display->showDefaultScreen();
+
+  // Initialize the timer. The timer thread runs separately from the main loop
+  // and will trigger sending a counter message.
   timer.every(INTERVAL_MS, runSensor);
-
-
+  Serial.println("[MAMA] Setup OK!");
 
 }
 
-void loop(){
-      timer.tick();
+void loop() {
+  timer.tick();
   // Use the default run(). The Mama duck is designed to also forward data it receives
   // from other ducks, across the network. It has a basic routing mechanism built-in
   // to prevent messages from hoping endlessly.
   duck.run();
-    
-    
-    };
+}
 
-  bool runSensor(void *) {
-  sprintf(message, "mama counter %d", counter++); 
-  Serial.print(message);
-  duck.sendPayloadStandard(message, "counter-message"); // sender id will be populated automatically
+bool runSensor(void *) {
+  bool result;
+  const byte* buffer;
   
-  return true;
+  String message = String("Counter:") + String(counter);
+  int length = message.length();
+  Serial.print("[MAMA] sensor data: ");
+  Serial.println(message);
+  buffer = (byte*) message.c_str(); 
+
+  result = sendData(buffer, length);
+  if (result) {
+    Serial.println("[MAMA] runSensor ok.");
+  } else {
+    Serial.println("[MAMA] runSensor failed.");
+  }
+  return result;
+}
+
+bool sendData(const byte* buffer, int length) {
+  bool sentOk = false;
+  
+  // Send Data can either take a byte buffer (unsigned char) or a vector
+  int err = duck.sendData(topics::status, buffer, length);
+  if (err == DUCK_ERR_NONE) {
+    counter++;
+    sentOk = true;
+  }
+  if (!sentOk) {
+    Serial.println("[MAMA] Failed to send data. error = " + String(err));
+  }
+  return sentOk;
 }
